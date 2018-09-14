@@ -1,13 +1,16 @@
 package main
 
 import (
-	"strings"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-	"net/http"
 	"io"
+	"net/http"
 	"os"
+	"runtime"
 
 	"github.com/devincarr/goarxiv"
 	"golang.org/x/tools/blog/atom"
@@ -45,6 +48,36 @@ func getArticle(e *atom.Entry) (*article, bool) {
 	return nil, false
 }
 
+func downloadFileC(filepath string, url string, wg *sync.WaitGroup) error {
+
+	_ = os.Mkdir("articlesC", 0755)
+	// Create the file
+	out, err := os.Create("articlesC/" + filepath)
+	if err != nil {
+		wg.Done()
+		return err
+	}
+	defer out.Close()
+
+	// Get the data
+	resp, err := http.Get(url)
+	if err != nil {
+		wg.Done()
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Write the body to file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		wg.Done()
+		return err
+	}
+
+	wg.Done()
+	return nil
+}
+
 func downloadFile(filepath string, url string) error {
 
 	_ = os.Mkdir("articles", 0755)
@@ -71,9 +104,33 @@ func downloadFile(filepath string, url string) error {
 	return nil
 }
 
+func downloadArticlesC(url string, count int) {
+	articles := getArticles(url, count)
+	var wg sync.WaitGroup
+	wg.Add(len(articles))
+	for _, article := range articles {
+		go downloadFileC(fmt.Sprintf("%v.pdf", strings.TrimSpace(article.title)), article.url, &wg)
+	}
+
+	wg.Wait()
+
+}
+
+func downloadArticles(url string, count int) {
+	articles := getArticles(url, count)
+	for _, article := range articles {
+		downloadFile(fmt.Sprintf("%v.pdf", strings.TrimSpace(article.title)), article.url)
+	}
+}
+
 func main() {
-	 articles := getArticles("google", 10)
-	 for _, article := range articles {
-		 downloadFile(fmt.Sprintf("%v.pdf", strings.TrimSpace(article.title)), article.url)
-	 }
+	t := time.Now()
+	downloadArticles("google", 10)
+	fmt.Printf("Not concurrent - %v\n", time.Since(t))
+
+	t = time.Now()
+	downloadArticlesC("google", 10)
+	fmt.Printf("Concurrent - %v\n", time.Since(t))
+
+	fmt.Printf("Core count - %v\n", runtime.NumCPU())
 }
