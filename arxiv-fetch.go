@@ -2,17 +2,17 @@ package main
 
 import (
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 
 	"github.com/devincarr/goarxiv"
+	"github.com/ogier/pflag"
 	"golang.org/x/tools/blog/atom"
 )
 
@@ -49,40 +49,12 @@ func getArticle(e *atom.Entry) (*article, bool) {
 }
 
 func downloadFileC(filepath string, url string, wg *sync.WaitGroup) error {
-
-	_ = os.Mkdir("articlesC", 0755)
-	// Create the file
-	out, err := os.Create("articlesC/" + filepath)
-	if err != nil {
-		wg.Done()
-		return err
-	}
-	defer out.Close()
-
-	// Get the data
-	resp, err := http.Get(url)
-	if err != nil {
-		wg.Done()
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Write the body to file
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		wg.Done()
-		return err
-	}
-
-	wg.Done()
-	return nil
+	defer wg.Done()
+	return downloadFile(filepath, url)
 }
 
 func downloadFile(filepath string, url string) error {
-
-	_ = os.Mkdir("articles", 0755)
-	// Create the file
-	out, err := os.Create("articles/" + filepath)
+	out, err := os.Create(filepath)
 	if err != nil {
 		return err
 	}
@@ -104,33 +76,36 @@ func downloadFile(filepath string, url string) error {
 	return nil
 }
 
-func downloadArticlesC(url string, count int) {
-	articles := getArticles(url, count)
-	var wg sync.WaitGroup
-	wg.Add(len(articles))
-	for _, article := range articles {
-		go downloadFileC(fmt.Sprintf("%v.pdf", strings.TrimSpace(article.title)), article.url, &wg)
-	}
-
-	wg.Wait()
-
+func getFullName(a article, p string) string {
+	filename := fmt.Sprintf("%v.pdf", strings.TrimSpace(a.title))
+ return path.Join(p, filename)
 }
 
-func downloadArticles(url string, count int) {
+func downloadArticles(url string, count int, p string, parallel bool) {
 	articles := getArticles(url, count)
-	for _, article := range articles {
-		downloadFile(fmt.Sprintf("%v.pdf", strings.TrimSpace(article.title)), article.url)
+	os.MkdirAll(p, 0755)
+
+	if parallel {
+		var wg sync.WaitGroup
+		wg.Add(len(articles))
+		for _, article := range articles {
+			go downloadFileC(getFullName(article, p), article.url, &wg)
+		}
+		wg.Wait()
+	} else {
+		for _, article := range articles {
+			downloadFile(fmt.Sprintf(getFullName(article, p), strings.TrimSpace(article.title)), article.url)
+		}
 	}
 }
 
 func main() {
-	t := time.Now()
-	downloadArticles("google", 10)
-	fmt.Printf("Not concurrent - %v\n", time.Since(t))
+	search := pflag.String("search", "google", "The types of articles you want to search for. 'google' by default as an example.")
+	count := pflag.Int("count", 10, "The number of articles you want to retrieve. 10 by default.")
+	path := pflag.String("path", "articles", "the location you want to store the articles. A folder 'articles' in the current directory by default.")
+	parallel := pflag.Bool("parallel", true, "Whether or not you want to pull articles down in parallel. Default is yes.")
 
-	t = time.Now()
-	downloadArticlesC("google", 10)
-	fmt.Printf("Concurrent - %v\n", time.Since(t))
+	pflag.Parse()
 
-	fmt.Printf("Core count - %v\n", runtime.NumCPU())
+	downloadArticles(*search, *count, *path, *parallel)
 }
